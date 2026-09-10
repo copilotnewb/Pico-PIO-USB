@@ -21,6 +21,7 @@
 #include "pio_usb.h"
 #include "usb_definitions.h"
 #include "pio_usb_configuration.h"
+#include "pio_usb_iso.h"
 #include "pio_usb_ll.h"
 #include "usb_crc.h"
 
@@ -101,7 +102,6 @@ void __not_in_flash_func(pio_usb_bus_usb_transfer)(pio_port_t *pp,
   if (pp->low_speed) {
     // For Low speed host, wait until EOP is fully sent. Otherwise, we can send another packet
     // before inter-packet delay timeout, which is 2-bit time by USB specs.
-    // For Full speed, our overhead is probably enough without this additional wait.
     while (*pc <= PIO_USB_TX_ENCODED_DATA_COMP) {
       continue;
     }
@@ -124,7 +124,7 @@ void __no_inline_not_in_flash_func(pio_usb_bus_send_token)(pio_port_t *pp,
   packet[3] = (crc << 3) | ((dat >> 8) & 0x1f);
 
   uint8_t packet_encoded[sizeof(packet) * 2 * 7 / 6 + 2];
-  uint8_t encoded_len = pio_usb_ll_encode_tx_data(packet, sizeof(packet), packet_encoded);
+  uint16_t encoded_len = pio_usb_ll_encode_tx_data(packet, sizeof(packet), packet_encoded);
 
   pio_usb_bus_usb_transfer(pp, packet_encoded, encoded_len);
 }
@@ -235,7 +235,7 @@ int __no_inline_not_in_flash_func(pio_usb_bus_receive_packet_and_handshake)(
     } else if ((pio_usb_rx->irq & IRQ_RX_COMP_MASK) != 0) {
       // Exit since we've gotten an EOP.
       // Timing critical: per USB specs, handshake must be sent within 2-7 bit-time strictly
-      if (turnaround_in_cycle) {
+      if (turnaround_in_cycle && handshake != 0) {
         busy_wait_at_least_cycles(turnaround_in_cycle); // wait for turnaround for LS only
       }
 
@@ -243,6 +243,12 @@ int __no_inline_not_in_flash_func(pio_usb_bus_receive_packet_and_handshake)(
         // Only ACK if crc matches
         if (idx >= 4 && crc_match) {
           pio_usb_bus_usb_transfer(pp, ack_encoded, 5);
+          return idx - 4;
+        }
+      } else if (handshake == 0) {
+        // Isochronous IN transfers never send a handshake, but the received
+        // packet still needs a valid CRC before it can be delivered.
+        if (idx >= 4 && crc_match) {
           return idx - 4;
         }
       } else if (handshake == USB_PID_NAK) {
@@ -447,7 +453,7 @@ int __no_inline_not_in_flash_func(pio_usb_set_out_data)(endpoint_t *ep,
 void __no_inline_not_in_flash_func(pio_usb_ll_configure_endpoint)(
     endpoint_t *ep, uint8_t const *desc_endpoint) {
   const endpoint_descriptor_t *d = (const endpoint_descriptor_t *)desc_endpoint;
-  ep->size = d->max_size[0] | (d->max_size[1] << 8);
+  ep->size = (d->max_size[0] | ((uint16_t)d->max_size[1] << 8)) & 0x07ffu;
   ep->ep_num = d->epaddr;
   ep->attr = d->attr;
   ep->interval = d->interval;
@@ -456,15 +462,15 @@ void __no_inline_not_in_flash_func(pio_usb_ll_configure_endpoint)(
 }
 
 // Encode transfer data to 2bit sequence represents TX PIO instruction address
-uint8_t __no_inline_not_in_flash_func(pio_usb_ll_encode_tx_data)(
-    uint8_t const *buffer, uint8_t buffer_len, uint8_t *encoded_data) {
-  uint16_t bit_idx = 0;
+uint16_t __no_inline_not_in_flash_func(pio_usb_ll_encode_tx_data)(
+    uint8_t const *buffer, uint16_t buffer_len, uint8_t *encoded_data) {
+  uint32_t bit_idx = 0;
   int current_state = 1;
   int bit_stuffing = 6;
-  for (int idx = 0; idx < buffer_len; idx++) {
+  for (uint16_t idx = 0; idx < buffer_len; idx++) {
     uint8_t data_byte = buffer[idx];
     for (int b = 0; b < 8; b++) {
-      uint8_t byte_idx = bit_idx >> 2;
+      uint16_t byte_idx = bit_idx >> 2;
       encoded_data[byte_idx] <<= 2;
       if (data_byte & (1 << b)) {
         if (current_state) {
@@ -487,7 +493,7 @@ uint8_t __no_inline_not_in_flash_func(pio_usb_ll_encode_tx_data)(
       bit_idx++;
 
       if (bit_stuffing == 0) {
-        byte_idx = bit_idx >> 2;
+        uint16_t byte_idx = bit_idx >> 2;
         encoded_data[byte_idx] <<= 2;
 
         if (current_state) {
@@ -503,7 +509,7 @@ uint8_t __no_inline_not_in_flash_func(pio_usb_ll_encode_tx_data)(
     }
   }
 
-  uint8_t byte_idx = bit_idx >> 2;
+  uint16_t byte_idx = bit_idx >> 2;
   encoded_data[byte_idx] <<= 2;
   encoded_data[byte_idx] |= PIO_USB_TX_ENCODED_DATA_SE0;
   bit_idx++;
@@ -529,8 +535,9 @@ static inline __force_inline void prepare_tx_data(endpoint_t *ep) {
   uint16_t const xact_len = pio_usb_ll_get_transaction_len(ep);
   uint8_t buffer[PIO_USB_EP_SIZE + 4];
   buffer[0] = USB_SYNC;
-  buffer[1] = (ep->data_id == 1) ? USB_PID_DATA1
-                                 : USB_PID_DATA0; // USB_PID_SETUP also DATA0
+  buffer[1] = pio_usb_ep_is_isochronous(ep->attr)
+                  ? USB_PID_DATA0
+                  : ((ep->data_id == 1) ? USB_PID_DATA1 : USB_PID_DATA0);
   memcpy(buffer + 2, ep->app_buf, xact_len);
 
   uint16_t const crc16 = calc_usb_crc16(ep->app_buf, xact_len);
@@ -570,7 +577,9 @@ bool __no_inline_not_in_flash_func(pio_usb_ll_transfer_continue)(
     endpoint_t *ep, uint16_t xferred_bytes) {
   ep->app_buf += xferred_bytes;
   ep->actual_len += xferred_bytes;
-  ep->data_id ^= 1;
+  if (!pio_usb_ep_is_isochronous(ep->attr)) {
+    ep->data_id ^= 1;
+  }
 
   if ((xferred_bytes < ep->size) || (ep->actual_len >= ep->total_len)) {
     // complete if all bytes transferred or short packet
