@@ -16,6 +16,7 @@
 #include "hardware/gpio.h"
 
 #include "pio_usb.h"
+#include "pio_usb_iso.h"
 #include "pio_usb_ll.h"
 #include "usb_crc.h"
 
@@ -181,8 +182,8 @@ static void __no_inline_not_in_flash_func(configure_lowspeed_host)(
   pio_sm_set_jmp_pin(pp->pio_usb_rx, pp->sm_rx, port->pin_dm);
   SM_SET_CLKDIV_MAXSPEED(pp->pio_usb_rx, pp->sm_rx);
 
-  pio_sm_set_jmp_pin(pp->pio_usb_rx, pp->sm_eop, port->pin_dp);
-  pio_sm_set_in_pins(pp->pio_usb_rx, pp->sm_eop, port->pin_dm);
+  pio_sm_set_jmp_pin(pp->pio_usb_rx, pp->sm_eop, port->pin_dm);
+  pio_sm_set_in_pins(pp->pio_usb_rx, pp->sm_eop, port->pin_dp);
   SM_SET_CLKDIV(pp->pio_usb_rx, pp->sm_eop, pp->clk_div_ls_rx);
 }
 
@@ -290,7 +291,7 @@ void __not_in_flash_func(pio_usb_host_frame)(void) {
          ep_pool_idx++) {
       endpoint_t *ep = PIO_USB_ENDPOINT(ep_pool_idx);
       if ((ep->root_idx == root_idx) && ep->size) {
-        bool const is_periodic = ((ep->attr & 0x03) == EP_ATTR_INTERRUPT);
+        bool const is_periodic = pio_usb_ep_is_periodic(ep->attr);
 
         if (is_periodic && (ep->interval_counter > 0)) {
           ep->interval_counter--;
@@ -314,7 +315,8 @@ void __not_in_flash_func(pio_usb_host_frame)(void) {
             }
 
             if (is_periodic) {
-              ep->interval_counter = ep->interval - 1;
+              ep->interval_counter =
+                  pio_usb_ep_interval_frames(ep->attr, ep->interval) - 1;
             }
           }
 
@@ -433,6 +435,13 @@ static inline __force_inline endpoint_t * _find_ep(uint8_t root_idx,
 bool pio_usb_host_endpoint_open(uint8_t root_idx, uint8_t device_address,
                                 uint8_t const *desc_endpoint, bool need_pre) {
   const endpoint_descriptor_t *d = (const endpoint_descriptor_t *)desc_endpoint;
+  uint16_t const max_packet_size =
+      (d->max_size[0] | ((uint16_t)d->max_size[1] << 8)) & 0x07ffu;
+
+  if (max_packet_size == 0 || max_packet_size > PIO_USB_EP_SIZE) {
+    return false;
+  }
+
   if (NULL != _find_ep(root_idx, device_address, d->epaddr)) {
     return true; // already opened
   }
@@ -537,13 +546,17 @@ bool pio_usb_host_endpoint_abort_transfer(uint8_t root_idx, uint8_t device_addre
 static int __no_inline_not_in_flash_func(usb_in_transaction)(pio_port_t *pp,
                                                              endpoint_t *ep) {
   int res = 0;
-  uint8_t expect_pid = (ep->data_id == 1) ? USB_PID_DATA1 : USB_PID_DATA0;
+  bool const is_iso = pio_usb_ep_is_isochronous(ep->attr);
+  uint8_t const expect_pid =
+      is_iso ? USB_PID_DATA0
+             : ((ep->data_id == 1) ? USB_PID_DATA1 : USB_PID_DATA0);
 
   pio_usb_bus_prepare_receive(pp);
   pio_usb_bus_send_token(pp, USB_PID_IN, ep->dev_addr, ep->ep_num);
   pio_usb_bus_start_receive(pp);
 
-  int receive_len = pio_usb_bus_receive_packet_and_handshake(pp, USB_PID_ACK);
+  int receive_len = pio_usb_bus_receive_packet_and_handshake(
+      pp, is_iso ? 0 : USB_PID_ACK);
   uint8_t const receive_pid = pp->usb_rx_buffer[1];
 
   if (receive_len >= 0) {
@@ -558,12 +571,17 @@ static int __no_inline_not_in_flash_func(usb_in_transaction)(pio_port_t *pp,
       }
       memcpy(ep->app_buf, &pp->usb_rx_buffer[2], receive_len);
       pio_usb_ll_transfer_continue(ep, receive_len);
+    } else if (is_iso) {
+      // Isochronous packets are never retried. A malformed frame completes
+      // this transfer with an error so the class driver can queue the next one.
+      res = -1;
+      pio_usb_ll_transfer_complete(ep, PIO_USB_INTS_ENDPOINT_ERROR_BITS);
     } else {
       // DATA0/1 mismatched, 0 for re-try next frame
     }
-  } else if (receive_pid == USB_PID_NAK) {
+  } else if (!is_iso && receive_pid == USB_PID_NAK) {
     // NAK try again next frame
-  } else if (receive_pid == USB_PID_STALL) {
+  } else if (!is_iso && receive_pid == USB_PID_STALL) {
     pio_usb_ll_transfer_complete(ep, PIO_USB_INTS_ENDPOINT_STALLED_BITS);
   } else {
     res = -1;
@@ -571,8 +589,8 @@ static int __no_inline_not_in_flash_func(usb_in_transaction)(pio_port_t *pp,
       res = -2;
     }
 
-    if (++ep->failed_count >= TRANSACTION_MAX_RETRY) {
-      pio_usb_ll_transfer_complete(ep, PIO_USB_INTS_ENDPOINT_ERROR_BITS); // failed after 3 consecutive retries
+    if (is_iso || ++ep->failed_count >= TRANSACTION_MAX_RETRY) {
+      pio_usb_ll_transfer_complete(ep, PIO_USB_INTS_ENDPOINT_ERROR_BITS);
     }
   }
 
@@ -592,6 +610,15 @@ static int __no_inline_not_in_flash_func(usb_out_transaction)(pio_port_t *pp,
   int res = 0;
 
   uint16_t const xact_len = pio_usb_ll_get_transaction_len(ep);
+
+  if (pio_usb_ep_is_isochronous(ep->attr)) {
+    // Full-speed isochronous OUT has no handshake and is never retried.
+    pio_usb_bus_send_token(pp, USB_PID_OUT, ep->dev_addr, ep->ep_num);
+    pio_usb_bus_usb_transfer(pp, ep->buffer, ep->encoded_data_len);
+    pio_usb_ll_transfer_continue(ep, xact_len);
+    ep->failed_count = 0;
+    return 0;
+  }
 
   pio_usb_bus_prepare_receive(pp);
   pio_usb_bus_send_token(pp, USB_PID_OUT, ep->dev_addr, ep->ep_num);
