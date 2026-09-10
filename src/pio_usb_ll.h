@@ -86,7 +86,7 @@ typedef struct {
   bool need_pre;
   bool low_speed;
 
-  uint8_t usb_rx_buffer[128];
+  uint8_t usb_rx_buffer[PIO_USB_EP_SIZE + 4];
 } pio_port_t;
 
 //--------------------------------------------------------------------+
@@ -195,8 +195,8 @@ enum {
   PIO_USB_TX_ENCODED_DATA_COMP = 2,
   PIO_USB_TX_ENCODED_DATA_J = 3,
 };
-uint8_t pio_usb_ll_encode_tx_data(uint8_t const *buffer, uint8_t buffer_len,
-                                  uint8_t *encoded_data);
+uint16_t pio_usb_ll_encode_tx_data(uint8_t const *buffer, uint16_t buffer_len,
+                                   uint8_t *encoded_data);
 
 //--------------------------------------------------------------------
 // Host Controller functions
