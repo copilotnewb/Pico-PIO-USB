@@ -49,4 +49,10 @@ typedef struct {
 #define PIO_USB_HUB_PORT_CNT 8
 #define PIO_USB_ROOT_PORT_CNT 2
 
+#ifndef PIO_USB_EP_SIZE
 #define PIO_USB_EP_SIZE 64
+#endif
+
+#if PIO_USB_EP_SIZE < 64 || PIO_USB_EP_SIZE > 1023
+#error "PIO_USB_EP_SIZE must be between 64 and 1023 bytes"
+#endif
