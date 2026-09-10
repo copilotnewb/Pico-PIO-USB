@@ -182,8 +182,8 @@ static void __no_inline_not_in_flash_func(configure_lowspeed_host)(
   pio_sm_set_jmp_pin(pp->pio_usb_rx, pp->sm_rx, port->pin_dm);
   SM_SET_CLKDIV_MAXSPEED(pp->pio_usb_rx, pp->sm_rx);
 
-  pio_sm_set_jmp_pin(pp->pio_usb_rx, pp->sm_eop, port->pin_dm);
-  pio_sm_set_in_pins(pp->pio_usb_rx, pp->sm_eop, port->pin_dp);
+  pio_sm_set_jmp_pin(pp->pio_usb_rx, pp->sm_eop, port->pin_dp);
+  pio_sm_set_in_pins(pp->pio_usb_rx, pp->sm_eop, port->pin_dm);
   SM_SET_CLKDIV(pp->pio_usb_rx, pp->sm_eop, pp->clk_div_ls_rx);
 }
 
