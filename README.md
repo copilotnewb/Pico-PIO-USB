@@ -13,6 +13,7 @@ https://user-images.githubusercontent.com/43873124/146642806-bdf34af6-4342-4a95-
 |Planned Features|Status|
 |-|-|
 |FS Host|✔|
+|FS Isochronous Host|✔|
 |LS Host|✔|
 |Hub support|✔|
 |Multi port|✔|
@@ -31,6 +32,16 @@ cmake ..
 make
 # Copy UF2 file in capture_hid_report/ or usbdevice/ to RPiPico
 ```
+
+### Isochronous host endpoints
+
+The default maximum endpoint packet size remains 64 bytes to preserve the existing RAM footprint. Applications that need larger full-speed isochronous packets can override `PIO_USB_EP_SIZE` at compile time. For example, 256 bytes is sufficient for 48 kHz, 16-bit stereo audio packets:
+
+```bash
+cmake -DCMAKE_C_FLAGS="-DPIO_USB_EP_SIZE=256" ..
+```
+
+Endpoint descriptors whose maximum packet size exceeds the configured `PIO_USB_EP_SIZE` are rejected when opened. The supported compile-time range is 64 to 1023 bytes.
 
 Another sample program for split keyboard with QMK
 
