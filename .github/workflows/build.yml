@@ -50,12 +50,17 @@ jobs:
         git -C $PICO_SDK_PATH/lib/tinyusb fetch
         git -C $PICO_SDK_PATH/lib/tinyusb checkout master
 
-    - name: Build
+    - name: Configure examples
       run: |
         mkdir -p examples/build
         cd examples/build
         cmake -DPICO_BOARD=${{ matrix.board }} ..
-        make
+
+    - name: Build audio_host
+      run: cmake --build examples/build --target audio_host --parallel 2
+
+    - name: Build all examples
+      run: cmake --build examples/build --parallel 2
 
     - uses: actions/upload-artifact@v4
       with:
@@ -65,6 +70,8 @@ jobs:
           examples/build/usb_device/usb_device.hex
           examples/build/host_hid_to_device_cdc/host_hid_to_device_cdc.uf2
           examples/build/host_hid_to_device_cdc/host_hid_to_device_cdc.hex
+          examples/build/audio_host/audio_host.uf2
+          examples/build/audio_host/audio_host.hex
 
   build-arduino:
     strategy:
