@@ -12,6 +12,8 @@ target_sources(${target_name} PRIVATE
 target_compile_definitions(${target_name} PRIVATE
   PIO_USB_USE_TINYUSB
   PIO_USB_EP_SIZE=256
+  # Standard DeskHop routes its USB-A host connector to GP14 (D+) / GP15 (D-).
+  PIO_USB_DP_PIN_DEFAULT=14
 )
 
 target_include_directories(${target_name} PRIVATE
