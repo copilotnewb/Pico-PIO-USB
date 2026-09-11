@@ -225,11 +225,14 @@ void audio_diagnostics_task(void) {
   const uint32_t attaches = attach_count, removes = remove_count, events = xfer_event_count;
   restore_interrupts(irq);
   static const char *const line_names[] = {"SE0", "FS", "LS", "SE1", "uninit"};
-  printf("[diag] frame_delta=%lu line=%s init=%u conn=%u susp=%u attach=%lu remove=%lu xfer=%lu\r\n",
-         (unsigned long)(frames - previous_frames), line_names[line], initialized, connected, suspended,
-         (unsigned long)attaches, (unsigned long)removes, (unsigned long)events);
-  printf("[diag] reset=%lu/%lu ISO_OUT=%lu MIC_CB=%lu SPK_CB=%lu FAIL=%lu stage=%u\r\n",
-         (unsigned long)reset_start_count, (unsigned long)reset_end_count, (unsigned long)iso_out_submitted,
-         (unsigned long)capture_count, (unsigned long)playback_count, (unsigned long)failure_count, state.stage);
+  /* A/B test: retain the snapshot and counters, but suppress periodic UART output. */
+  (void)line_names;
+  (void)line;
+  (void)initialized;
+  (void)connected;
+  (void)suspended;
+  (void)attaches;
+  (void)removes;
+  (void)events;
   previous_frames = frames;
 }
