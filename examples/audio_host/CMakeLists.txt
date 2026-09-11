@@ -11,7 +11,9 @@ target_sources(${target_name} PRIVATE
 
 target_compile_definitions(${target_name} PRIVATE
   PIO_USB_USE_TINYUSB
-  PIO_USB_EP_SIZE=256
+  # The KTMicro/UGREEN test adapter advertises wMaxPacketSize=384 on its
+  # 16-bit playback alternate, even though 44.1/48 kHz transfers are smaller.
+  PIO_USB_EP_SIZE=384
   # Standard DeskHop routes its USB-A host connector to GP14 (D+) / GP15 (D-).
   PIO_USB_DP_PIN_DEFAULT=14
 )
