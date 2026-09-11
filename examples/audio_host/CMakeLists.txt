@@ -33,7 +33,7 @@ target_compile_definitions(${target_name} PRIVATE
   # DeskHop USB-A: GP14 D+, GP15 D-.
   PIO_USB_DP_PIN_DEFAULT=14
   # Fast UART reduces main-loop stalls from diagnostics. No per-ISO-packet log.
-  PICO_DEFAULT_UART_BAUD_RATE=921600
+  PICO_DEFAULT_UART_BAUD_RATE=115200
   AUDIO_HOST_TINYUSB_REV="${audio_host_tinyusb_rev}"
 )
 
