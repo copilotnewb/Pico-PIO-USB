@@ -1,0 +1,75 @@
+name: Hub Backport Experiment
+
+on:
+  push:
+    branches:
+      - test/audio-host-hub-backport
+  workflow_dispatch:
+
+env:
+  PICO_SDK_PATH: ${{ github.workspace }}/pico-sdk
+
+jobs:
+  build-hub-audio:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install ARM GCC
+        uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: '12.3.Rel1'
+
+      - name: Checkout experiment branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Overlay upstream 0.5.3 transport and ISO backport
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cp src/pio_usb_iso.h /tmp/pio_usb_iso.h
+          git fetch --no-tags https://github.com/sekigon-gonnoc/Pico-PIO-USB.git refs/tags/0.5.3:refs/tags/hub-base-0.5.3
+          git checkout refs/tags/hub-base-0.5.3 -- src
+          cp /tmp/pio_usb_iso.h src/pio_usb_iso.h
+          git apply --check experiments/audio_iso_on_v053.patch
+          git apply experiments/audio_iso_on_v053.patch
+          git diff --check
+          git diff --stat
+
+      - name: Run ISO policy helper test
+        shell: bash
+        run: |
+          cc -std=c11 -Wall -Wextra -Isrc tests/test_iso_helpers.c -o /tmp/test_iso_helpers
+          /tmp/test_iso_helpers
+
+      - name: Checkout Pico SDK 2.1.0
+        uses: actions/checkout@v4
+        with:
+          repository: raspberrypi/pico-sdk
+          ref: 2.1.0
+          path: pico-sdk
+
+      - name: Pin TinyUSB used by working audio test
+        shell: bash
+        run: |
+          git -C "$PICO_SDK_PATH" submodule update --init lib/tinyusb
+          git -C "$PICO_SDK_PATH/lib/tinyusb" fetch origin ad54f72e10859596044918b76ed5a73402ca545b
+          git -C "$PICO_SDK_PATH/lib/tinyusb" checkout ad54f72e10859596044918b76ed5a73402ca545b
+
+      - name: Configure audio host example
+        shell: bash
+        run: |
+          cmake -S examples -B examples/build -DPICO_BOARD=pico
+
+      - name: Build hub audio host
+        shell: bash
+        run: |
+          cmake --build examples/build --target audio_host --parallel 2
+
+      - name: Publish hub test firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: audio-host-hub-backport
+          path: |
+            examples/build/audio_host/audio_host.uf2
+            examples/build/audio_host/audio_host.hex
