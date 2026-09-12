@@ -31,8 +31,8 @@ jobs:
           git fetch --no-tags https://github.com/sekigon-gonnoc/Pico-PIO-USB.git refs/tags/0.5.3:refs/tags/hub-base-0.5.3
           git checkout refs/tags/hub-base-0.5.3 -- src
           cp /tmp/pio_usb_iso.h src/pio_usb_iso.h
-          git apply --check experiments/audio_iso_on_v053.patch
-          git apply experiments/audio_iso_on_v053.patch
+          git apply --recount --check experiments/audio_iso_on_v053.patch
+          git apply --recount experiments/audio_iso_on_v053.patch
           git diff --check
           git diff --stat
 
