@@ -1,0 +1,242 @@
+diff --git a/src/pio_usb_configuration.h b/src/pio_usb_configuration.h
+index 3e87823..c948f39 100644
+--- a/src/pio_usb_configuration.h
++++ b/src/pio_usb_configuration.h
+@@ -49,4 +49,10 @@ typedef struct {
+ #define PIO_USB_HUB_PORT_CNT 8
+ #define PIO_USB_ROOT_PORT_CNT 2
+ 
++#ifndef PIO_USB_EP_SIZE
+ #define PIO_USB_EP_SIZE 64
++#endif
++
++#if PIO_USB_EP_SIZE < 64 || PIO_USB_EP_SIZE > 1023
++#error "PIO_USB_EP_SIZE must be between 64 and 1023 bytes"
++#endif
+diff --git a/src/usb_definitions.h b/src/usb_definitions.h
+--- a/src/usb_definitions.h
++++ b/src/usb_definitions.h
+@@ -65,7 +65,7 @@ typedef struct {
+ 
+   volatile uint8_t attr;
+   volatile uint8_t interval;
+-  volatile uint8_t interval_counter;
++  volatile uint16_t interval_counter;
+   volatile uint8_t data_id; // data0 or data1
+ 
+   volatile bool stalled;
+@@ -74,7 +74,7 @@ typedef struct {
+   volatile bool transfer_started;
+   volatile bool transfer_aborted;
+ 
+-  uint8_t buffer[64 + 4];
++  uint8_t buffer[PIO_USB_EP_SIZE + 4];
+   uint8_t *app_buf;
+   uint16_t total_len;
+   uint16_t actual_len;
+diff --git a/src/pio_usb_ll.h b/src/pio_usb_ll.h
+--- a/src/pio_usb_ll.h
++++ b/src/pio_usb_ll.h
+@@ -75,7 +75,7 @@ typedef struct {
+ 
+   bool need_pre;
+ 
+-  uint8_t usb_rx_buffer[128];
++  uint8_t usb_rx_buffer[PIO_USB_EP_SIZE + 4];
+ } pio_port_t;
+@@ -175,6 +175,8 @@ void pio_usb_host_close_device(uint8_t root_idx, uint8_t device_address);
+ 
+ bool pio_usb_host_endpoint_open(uint8_t root_idx, uint8_t device_address,
+                                 uint8_t const *desc_endpoint, bool need_pre);
++bool pio_usb_host_endpoint_close(uint8_t root_idx, uint8_t device_address,
++                                 uint8_t ep_address);
+ bool pio_usb_host_send_setup(uint8_t root_idx, uint8_t device_address,
+                              uint8_t const setup_packet[8]);
+diff --git a/src/pio_usb.c b/src/pio_usb.c
+--- a/src/pio_usb.c
++++ b/src/pio_usb.c
+@@ -17,6 +17,7 @@
+ 
+ #include "pio_usb.h"
+ #include "usb_definitions.h"
++#include "pio_usb_iso.h"
+ #include "pio_usb_ll.h"
+ #include "usb_crc.h"
+ #include "usb_tx.pio.h"
+@@ -151,7 +152,7 @@ int __no_inline_not_in_flash_func(pio_usb_bus_receive_packet_and_handshake)(
+ 
+   // timing critical start
+   if (t > 0) {
+-    if (handshake == USB_PID_ACK) {
++    if (handshake == USB_PID_ACK || handshake == 0) {
+       while ((pp->pio_usb_rx->irq & IRQ_RX_COMP_MASK) == 0) {
+         if (pio_sm_get_rx_fifo_level(pp->pio_usb_rx, pp->sm_rx)) {
+           uint8_t data = pio_sm_get(pp->pio_usb_rx, pp->sm_rx) >> 24;
+@@ -169,7 +170,9 @@ int __no_inline_not_in_flash_func(pio_usb_bus_receive_packet_and_handshake)(
+       }
+ 
+       if (idx >= 4 && crc_match) {
+-        pio_usb_bus_send_handshake(pp, USB_PID_ACK);
++        if (handshake == USB_PID_ACK) {
++          pio_usb_bus_send_handshake(pp, USB_PID_ACK);
++        }
+         // timing critical end
+         return idx - 4;
+       }
+@@ -361,7 +364,7 @@ int __no_inline_not_in_flash_func(pio_usb_set_out_data)(endpoint_t *ep,
+ void __no_inline_not_in_flash_func(pio_usb_ll_configure_endpoint)(
+     endpoint_t *ep, uint8_t const *desc_endpoint) {
+   const endpoint_descriptor_t *d = (const endpoint_descriptor_t *)desc_endpoint;
+-  ep->size = d->max_size[0] | (d->max_size[1] << 8);
++  ep->size = (d->max_size[0] | ((uint16_t)d->max_size[1] << 8)) & 0x07ffu;
+   ep->ep_num = d->epaddr;
+   ep->attr = d->attr;
+   ep->interval = d->interval;
+@@ -373,9 +376,9 @@ static inline __force_inline void prepare_tx_data(endpoint_t *ep) {
+   uint16_t const xact_len = pio_usb_ll_get_transaction_len(ep);
+   ep->buffer[0] = USB_SYNC;
+-  ep->buffer[1] = (ep->data_id == 1)
+-                      ? USB_PID_DATA1
+-                      : USB_PID_DATA0; // USB_PID_SETUP also DATA0
++  ep->buffer[1] = pio_usb_ep_is_isochronous(ep->attr)
++                      ? USB_PID_DATA0
++                      : ((ep->data_id == 1) ? USB_PID_DATA1 : USB_PID_DATA0);
+   memcpy(ep->buffer + 2, ep->app_buf, xact_len);
+ 
+   uint16_t const crc16 = calc_usb_crc16(ep->app_buf, xact_len);
+@@ -409,7 +412,9 @@ bool __no_inline_not_in_flash_func(pio_usb_ll_transfer_continue)(
+     endpoint_t *ep, uint16_t xferred_bytes) {
+   ep->app_buf += xferred_bytes;
+   ep->actual_len += xferred_bytes;
+-  ep->data_id ^= 1;
++  if (!pio_usb_ep_is_isochronous(ep->attr)) {
++    ep->data_id ^= 1;
++  }
+ 
+   if ((xferred_bytes < ep->size) || (ep->actual_len >= ep->total_len)) {
+     // complete if all bytes transferred or short packet
+diff --git a/src/pio_usb_host.c b/src/pio_usb_host.c
+--- a/src/pio_usb_host.c
++++ b/src/pio_usb_host.c
+@@ -13,6 +13,7 @@
+ #include "hardware/sync.h"
+ 
+ #include "pio_usb.h"
++#include "pio_usb_iso.h"
+ #include "pio_usb_ll.h"
+ #include "usb_crc.h"
+ #include "usb_rx.pio.h"
+@@ -253,7 +254,7 @@ void __not_in_flash_func(pio_usb_host_frame)(void) {
+          ep_pool_idx++) {
+       endpoint_t *ep = PIO_USB_ENDPOINT(ep_pool_idx);
+       if ((ep->root_idx == root_idx) && ep->size) {
+-        bool const is_periodic = ((ep->attr & 0x03) == EP_ATTR_INTERRUPT);
++        bool const is_periodic = pio_usb_ep_is_periodic(ep->attr);
+ 
+         if (is_periodic && (ep->interval_counter > 0)) {
+           ep->interval_counter--;
+@@ -277,7 +278,8 @@ void __not_in_flash_func(pio_usb_host_frame)(void) {
+             }
+ 
+             if (is_periodic) {
+-              ep->interval_counter = ep->interval - 1;
++              ep->interval_counter =
++                  pio_usb_ep_interval_frames(ep->attr, ep->interval) - 1;
+             }
+           }
+@@ -393,6 +395,13 @@ static inline __force_inline endpoint_t * _find_ep(uint8_t root_idx,
+ bool pio_usb_host_endpoint_open(uint8_t root_idx, uint8_t device_address,
+                                 uint8_t const *desc_endpoint, bool need_pre) {
+   const endpoint_descriptor_t *d = (const endpoint_descriptor_t *)desc_endpoint;
++  uint16_t const max_packet_size =
++      (d->max_size[0] | ((uint16_t)d->max_size[1] << 8)) & 0x07ffu;
++
++  if (max_packet_size == 0 || max_packet_size > PIO_USB_EP_SIZE) {
++    return false;
++  }
++
+   for (int ep_pool_idx = 0; ep_pool_idx < PIO_USB_EP_POOL_CNT; ep_pool_idx++) {
+     endpoint_t *ep = PIO_USB_ENDPOINT(ep_pool_idx);
+@@ -410,6 +419,17 @@ bool pio_usb_host_endpoint_open(uint8_t root_idx, uint8_t device_address,
+   return false;
+ }
+ 
++bool pio_usb_host_endpoint_close(uint8_t root_idx, uint8_t device_address,
++                                 uint8_t ep_address) {
++  endpoint_t *ep = _find_ep(root_idx, device_address, ep_address);
++  if (!ep) {
++    return false;
++  }
++
++  ep->size = 0;
++  ep->has_transfer = false;
++  return true;
++}
++
+ bool pio_usb_host_send_setup(uint8_t root_idx, uint8_t device_address,
+                              uint8_t const setup_packet[8]) {
+@@ -488,14 +508,18 @@ static int __no_inline_not_in_flash_func(usb_in_transaction)(pio_port_t *pp,
+                                                              endpoint_t *ep) {
+   int res = 0;
+-  uint8_t expect_pid = (ep->data_id == 1) ? USB_PID_DATA1 : USB_PID_DATA0;
++  bool const is_iso = pio_usb_ep_is_isochronous(ep->attr);
++  uint8_t const expect_pid =
++      is_iso ? USB_PID_DATA0
++             : ((ep->data_id == 1) ? USB_PID_DATA1 : USB_PID_DATA0);
+ 
+   pio_usb_bus_prepare_receive(pp);
+   pio_usb_bus_send_token(pp, USB_PID_IN, ep->dev_addr, ep->ep_num);
+   pio_usb_bus_start_receive(pp);
+ 
+-  int receive_len = pio_usb_bus_receive_packet_and_handshake(pp, USB_PID_ACK);
++  int receive_len = pio_usb_bus_receive_packet_and_handshake(
++      pp, is_iso ? 0 : USB_PID_ACK);
+   uint8_t const receive_pid = pp->usb_rx_buffer[1];
+ 
+   if (receive_len >= 0) {
+@@ -503,15 +527,24 @@ static int __no_inline_not_in_flash_func(usb_in_transaction)(pio_port_t *pp,
+     if (receive_pid == expect_pid) {
++      uint16_t const xact_len = pio_usb_ll_get_transaction_len(ep);
++      if ((uint16_t)receive_len > xact_len) {
++        receive_len = xact_len;
++      }
+       memcpy(ep->app_buf, &pp->usb_rx_buffer[2], receive_len);
+       pio_usb_ll_transfer_continue(ep, receive_len);
++    } else if (is_iso) {
++      res = -1;
++      pio_usb_ll_transfer_complete(ep, PIO_USB_INTS_ENDPOINT_ERROR_BITS);
+     } else {
+       // DATA0/1 mismatched, 0 for re-try next frame
+     }
+-  } else if (receive_pid == USB_PID_NAK) {
++  } else if (!is_iso && receive_pid == USB_PID_NAK) {
+     // NAK try again next frame
+-  } else if (receive_pid == USB_PID_STALL) {
++  } else if (!is_iso && receive_pid == USB_PID_STALL) {
+     pio_usb_ll_transfer_complete(ep, PIO_USB_INTS_ENDPOINT_STALLED_BITS);
+   } else {
+     res = -1;
+@@ -519,7 +552,9 @@ static int __no_inline_not_in_flash_func(usb_in_transaction)(pio_port_t *pp,
+       res = -2;
+     }
+-    pio_usb_ll_transfer_complete(ep, PIO_USB_INTS_ENDPOINT_ERROR_BITS);
++    if (is_iso) {
++      pio_usb_ll_transfer_complete(ep, PIO_USB_INTS_ENDPOINT_ERROR_BITS);
++    }
+   }
+@@ -535,6 +570,17 @@ static int __no_inline_not_in_flash_func(usb_out_transaction)(pio_port_t *pp,
+ 
+   uint16_t const xact_len = pio_usb_ll_get_transaction_len(ep);
+ 
++  if (pio_usb_ep_is_isochronous(ep->attr)) {
++    pio_usb_bus_send_token(pp, USB_PID_OUT, ep->dev_addr, ep->ep_num);
++    while ((pp->pio_usb_tx->irq & IRQ_TX_COMP_MASK) == 0) {
++      continue;
++    }
++    pio_usb_bus_usb_transfer(pp, ep->buffer, xact_len + 4);
++    pio_usb_ll_transfer_continue(ep, xact_len);
++    return 0;
++  }
++
+   pio_usb_bus_prepare_receive(pp);
+   pio_usb_bus_send_token(pp, USB_PID_OUT, ep->dev_addr, ep->ep_num);
