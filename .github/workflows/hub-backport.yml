@@ -68,8 +68,20 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          git -C "$PICO_SDK_PATH/lib/tinyusb" apply --recount --check "$GITHUB_WORKSPACE/experiments/tinyusb_uac1_single_rate_skip_setcur.patch"
-          git -C "$PICO_SDK_PATH/lib/tinyusb" apply --recount "$GITHUB_WORKSPACE/experiments/tinyusb_uac1_single_rate_skip_setcur.patch"
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('pico-sdk/lib/tinyusb/src/class/audio/audio_host.c')
+          s = p.read_text()
+          old = '''if (_audioh_itf[s->idx].protocol == AUDIO_INT_PROTOCOL_CODE_V1 &&
+              rate_source->frequency_access == AUDIOH_CTRL_READ_WRITE) {'''
+          new = '''if (_audioh_itf[s->idx].protocol == AUDIO_INT_PROTOCOL_CODE_V1 &&
+              rate_source->frequency_access == AUDIOH_CTRL_READ_WRITE &&
+              rate_source->sample_rate_count > 1) {'''
+          count = s.count(old)
+          if count != 1:
+              raise SystemExit(f'expected exactly one UAC1 start condition, found {count}')
+          p.write_text(s.replace(old, new, 1))
+          PY
           git -C "$PICO_SDK_PATH/lib/tinyusb" diff --check
           git -C "$PICO_SDK_PATH/lib/tinyusb" diff -- src/class/audio/audio_host.c
 
