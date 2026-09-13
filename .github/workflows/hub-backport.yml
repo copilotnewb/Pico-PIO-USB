@@ -64,6 +64,15 @@ jobs:
           git -C "$PICO_SDK_PATH/lib/tinyusb" fetch origin ad54f72e10859596044918b76ed5a73402ca545b
           git -C "$PICO_SDK_PATH/lib/tinyusb" checkout ad54f72e10859596044918b76ed5a73402ca545b
 
+      - name: Skip redundant UAC1 SET_CUR for fixed-rate streams
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git -C "$PICO_SDK_PATH/lib/tinyusb" apply --recount --check "$GITHUB_WORKSPACE/experiments/tinyusb_uac1_single_rate_skip_setcur.patch"
+          git -C "$PICO_SDK_PATH/lib/tinyusb" apply --recount "$GITHUB_WORKSPACE/experiments/tinyusb_uac1_single_rate_skip_setcur.patch"
+          git -C "$PICO_SDK_PATH/lib/tinyusb" diff --check
+          git -C "$PICO_SDK_PATH/lib/tinyusb" diff -- src/class/audio/audio_host.c
+
       - name: Configure audio host example
         shell: bash
         run: |
@@ -77,7 +86,7 @@ jobs:
       - name: Publish hub test firmware
         uses: actions/upload-artifact@v4
         with:
-          name: audio-host-hub-diagnostic
+          name: audio-host-hub-fixed-rate-skip-setcur
           path: |
             examples/build/audio_host/audio_host.uf2
             examples/build/audio_host/audio_host.hex
