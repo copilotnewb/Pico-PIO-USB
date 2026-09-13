@@ -10,13 +10,14 @@
 #include "tusb.h"
 #include "app.h"
 #include "diagnostics.h"
+#include "diagnostics_state.h"
 
 #ifndef AUDIO_HOST_TINYUSB_REV
 #define AUDIO_HOST_TINYUSB_REV "unknown"
 #endif
 
 static void initialization_failed(const char *message) {
-  audio_diagnostics_fault(message);
+  audio_diagnostics_fault(AUDIO_DIAG_FAULT_INIT, message);
   while (true) {
     audio_diagnostics_task();
     tight_loop_contents();
