@@ -52,8 +52,13 @@ static inline void audio_diag_advance(audio_diag_state_t *s, uint8_t stage) {
   }
 }
 
+/* Latch the first/root fault. The demo may automatically retry a failed stream
+ * and produce secondary failures that should not replace the initial cause. */
 static inline void audio_diag_fault(audio_diag_state_t *s, uint8_t fault_code) {
-  if (fault_code != AUDIO_DIAG_FAULT_NONE) s->fault_code = fault_code;
+  if (s->fault_code == AUDIO_DIAG_FAULT_NONE &&
+      fault_code != AUDIO_DIAG_FAULT_NONE) {
+    s->fault_code = fault_code;
+  }
 }
 
 static inline void audio_diag_playback_complete(audio_diag_state_t *s) {
