@@ -26,7 +26,7 @@ static uint32_t capture_count, playback_count, failure_count;
 static uint32_t reset_start_count, reset_end_count, iso_out_submitted;
 static uint16_t iso_out_mask[CFG_TUH_DEVICE_MAX + 1];
 static uint32_t observed_generation;
-static uint8_t printed_stage;
+static uint8_t printed_stage, printed_fault;
 static volatile uint32_t link_generation, attach_count, remove_count, xfer_event_count;
 static volatile bool link_attached;
 
@@ -75,11 +75,12 @@ void audio_diagnostics_init(void) {
   board_led_write(false);
 }
 
-void audio_diagnostics_fault(const char *message) {
+void audio_diagnostics_fault(uint8_t fault_code, const char *message) {
   sync_link();
-  state.fault = true;
+  audio_diag_fault(&state, fault_code);
   ++failure_count;
-  printf("[diag] ERROR: %s (last stage=%u)\r\n", message, state.stage);
+  printf("[diag] ERROR code=%u: %s (last stage=%u)\r\n",
+         fault_code, message, state.stage);
 }
 
 void tuh_enum_descriptor_device_cb(uint8_t daddr, const tusb_desc_device_t *desc) {
@@ -141,11 +142,10 @@ void tuh_audio_event_cb(uint8_t idx, uint8_t stream_idx,
                         tuh_audio_event_t event, tusb_xfer_result_t result) {
   sync_link();
   if (result != XFER_RESULT_SUCCESS) {
-    state.fault = true;
-    ++failure_count;
+    audio_diagnostics_fault(AUDIO_DIAG_FAULT_AUDIO_EVENT,
+                            "TinyUSB audio event failed");
   } else if (event == TUH_AUDIO_EVENT_START_COMPLETE &&
              tuh_audio_stream_direction(idx, stream_idx) == TUH_AUDIO_STREAM_PLAYBACK) {
-    state.fault = false;
     audio_diag_advance(&state, AUDIO_DIAG_PLAYBACK_STARTED);
   }
   audio_example_event_cb(idx, stream_idx, event, result);
@@ -173,7 +173,10 @@ bool __wrap_hcd_setup_send(uint8_t rhport, uint8_t daddr, const uint8_t setup[8]
          daddr, setup[0], setup[1], setup[2] | ((unsigned)setup[3] << 8),
          setup[4] | ((unsigned)setup[5] << 8), setup[6] | ((unsigned)setup[7] << 8));
   const bool accepted = __real_hcd_setup_send(rhport, daddr, setup);
-  if (!accepted) audio_diagnostics_fault("HCD rejected SETUP submission");
+  if (!accepted) {
+    audio_diagnostics_fault(AUDIO_DIAG_FAULT_SETUP_REJECTED,
+                            "HCD rejected SETUP submission");
+  }
   return accepted;
 }
 
@@ -183,7 +186,10 @@ bool __wrap_hcd_edpt_open(uint8_t rhport, uint8_t daddr, const tusb_desc_endpoin
   printf("[diag] EP open addr=%u ep=%02x attr=%02x max=%u interval=%u %s\r\n",
          daddr, desc->bEndpointAddress, ((const uint8_t *)desc)[3], tu_edpt_packet_size(desc),
          desc->bInterval, accepted ? "OK" : "REJECTED");
-  if (!accepted) audio_diagnostics_fault("HCD rejected endpoint");
+  if (!accepted) {
+    audio_diagnostics_fault(AUDIO_DIAG_FAULT_EP_OPEN,
+                            "HCD rejected endpoint");
+  }
   if (accepted && daddr <= CFG_TUH_DEVICE_MAX &&
       desc->bmAttributes.xfer == TUSB_XFER_ISOCHRONOUS &&
       tu_edpt_dir(desc->bEndpointAddress) == TUSB_DIR_OUT) {
@@ -197,8 +203,12 @@ bool __wrap_hcd_edpt_xfer(uint8_t rhport, uint8_t daddr, uint8_t ep, uint8_t *bu
   const bool accepted = __real_hcd_edpt_xfer(rhport, daddr, ep, buffer, len);
   if (daddr <= CFG_TUH_DEVICE_MAX && tu_edpt_dir(ep) == TUSB_DIR_OUT &&
       (iso_out_mask[daddr] & (1u << tu_edpt_number(ep)))) {
-    if (accepted) ++iso_out_submitted;
-    else { state.fault = true; ++failure_count; }
+    if (accepted) {
+      ++iso_out_submitted;
+    } else {
+      audio_diagnostics_fault(AUDIO_DIAG_FAULT_ISO_SUBMIT,
+                              "HCD rejected ISO OUT transfer");
+    }
   }
   return accepted;
 }
@@ -206,10 +216,12 @@ bool __wrap_hcd_edpt_xfer(uint8_t rhport, uint8_t daddr, uint8_t ep, uint8_t *bu
 void audio_diagnostics_task(void) {
   sync_link();
   const uint32_t now = tusb_time_millis_api();
-  if (printed_stage != state.stage) {
+  if (printed_stage != state.stage || printed_fault != state.fault_code) {
     printed_stage = state.stage;
+    printed_fault = state.fault_code;
     led_epoch_ms = now;
-    printf("[diag] last successful stage=%u\r\n", state.stage);
+    printf("[diag] last successful stage=%u fault=%u\r\n",
+           state.stage, state.fault_code);
   }
   board_led_write(audio_diag_led_on(&state, now - led_epoch_ms));
   if (now - report_ms < 1000u) return;
