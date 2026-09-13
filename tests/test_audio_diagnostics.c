@@ -40,8 +40,10 @@ int main(void) {
   assert(AUDIO_DIAG_FAULT_ISO_SUBMIT == 8);
   assert(AUDIO_DIAG_FAULT_INIT == 9);
 
-  audio_diag_fault(&s, AUDIO_DIAG_FAULT_EP_OPEN);
-  assert(s.fault_code == AUDIO_DIAG_FAULT_EP_OPEN);
+  // Preserve the first/root fault even if the demo's automatic retry later fails differently.
+  audio_diag_fault(&s, AUDIO_DIAG_FAULT_CAPTURE_START);
+  audio_diag_fault(&s, AUDIO_DIAG_FAULT_CAPTURE_XFER);
+  assert(s.fault_code == AUDIO_DIAG_FAULT_CAPTURE_START);
   audio_diag_reset(&s);
   assert(s.stage == AUDIO_DIAG_BOOT && s.fault_code == AUDIO_DIAG_FAULT_NONE &&
          s.playback_completions == 0);
