@@ -31,6 +31,15 @@ int main(void) {
   for (unsigned i = 0; i < 1000; ++i) audio_diag_playback_complete(&s);
   assert(s.playback_completions == 2); // saturate, never overflow back to zero
 
+  // Audio-event failures must be distinguishable without changing USB behavior.
+  assert(AUDIO_DIAG_FAULT_CAPTURE_START == 3);
+  assert(AUDIO_DIAG_FAULT_PLAYBACK_START == 4);
+  assert(AUDIO_DIAG_FAULT_CAPTURE_XFER == 5);
+  assert(AUDIO_DIAG_FAULT_PLAYBACK_XFER == 6);
+  assert(AUDIO_DIAG_FAULT_STOP == 7);
+  assert(AUDIO_DIAG_FAULT_ISO_SUBMIT == 8);
+  assert(AUDIO_DIAG_FAULT_INIT == 9);
+
   audio_diag_fault(&s, AUDIO_DIAG_FAULT_EP_OPEN);
   assert(s.fault_code == AUDIO_DIAG_FAULT_EP_OPEN);
   audio_diag_reset(&s);
@@ -45,14 +54,14 @@ int main(void) {
 
   // Fault state: first burst is the last successful stage, second burst is fault code.
   s.stage = 4;
-  audio_diag_fault(&s, AUDIO_DIAG_FAULT_SETUP_REJECTED);
+  audio_diag_fault(&s, AUDIO_DIAG_FAULT_PLAYBACK_XFER);
   const uint32_t first_end = 4u * 250u;
   const uint32_t second_start = first_end + AUDIO_DIAG_GROUP_GAP_MS;
-  const uint32_t second_end = second_start + AUDIO_DIAG_FAULT_SETUP_REJECTED * 250u;
+  const uint32_t second_end = second_start + AUDIO_DIAG_FAULT_PLAYBACK_XFER * 250u;
   const uint32_t fault_cycle = audio_diag_led_cycle_ms(&s);
   assert(count_edges(&s, 0, first_end) == 4);
   assert(count_edges(&s, first_end, second_start) == 0);
-  assert(count_edges(&s, second_start, second_end) == AUDIO_DIAG_FAULT_SETUP_REJECTED);
+  assert(count_edges(&s, second_start, second_end) == AUDIO_DIAG_FAULT_PLAYBACK_XFER);
   assert(count_edges(&s, second_end, fault_cycle) == 0);
   assert(audio_diag_led_on(&s, 0) == audio_diag_led_on(&s, fault_cycle));
 
