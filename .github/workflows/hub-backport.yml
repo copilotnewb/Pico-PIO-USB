@@ -64,28 +64,27 @@ jobs:
           git -C "$PICO_SDK_PATH/lib/tinyusb" fetch origin ad54f72e10859596044918b76ed5a73402ca545b
           git -C "$PICO_SDK_PATH/lib/tinyusb" checkout ad54f72e10859596044918b76ed5a73402ca545b
 
-      - name: Skip redundant UAC1 SET_CUR for fixed-rate streams
+      - name: Disable audio stream start for mount-only test
         shell: bash
         run: |
           set -euxo pipefail
           python3 - <<'PY'
-          import re
           from pathlib import Path
-          p = Path('pico-sdk/lib/tinyusb/src/class/audio/audio_host.c')
+          p = Path('pico-sdk/lib/tinyusb/examples/host/audio_host/src/audio_app.c')
           s = p.read_text()
-          pattern = re.compile(
-              r'(if \(_audioh_itf\[s->idx\]\.protocol == AUDIO_INT_PROTOCOL_CODE_V1 &&\s*'
-              r'rate_source->frequency_access == AUDIOH_CTRL_READ_WRITE)(\) \{)'
-          )
-          s2, count = pattern.subn(
-              r'\1 &&\n      rate_source->sample_rate_count > 1\2', s, count=1
-          )
-          if count != 1:
-              raise SystemExit(f'expected exactly one UAC1 start condition, found {count}')
-          p.write_text(s2)
+          old = '''void tuh_audio_mount_cb(uint8_t idx) {
+            app_defer_ms_async(100, tuh_audio_mount_async, idx);
+          }'''
+          new = '''void tuh_audio_mount_cb(uint8_t idx) {
+            (void) idx;
+            // Hub isolation test: enumerate/mount only. Do not configure or start streams.
+          }'''
+          if old not in s:
+              raise SystemExit('audio mount callback pattern not found')
+          p.write_text(s.replace(old, new, 1))
           PY
           git -C "$PICO_SDK_PATH/lib/tinyusb" diff --check
-          git -C "$PICO_SDK_PATH/lib/tinyusb" diff -- src/class/audio/audio_host.c
+          git -C "$PICO_SDK_PATH/lib/tinyusb" diff -- examples/host/audio_host/src/audio_app.c
 
       - name: Configure audio host example
         shell: bash
@@ -97,10 +96,10 @@ jobs:
         run: |
           cmake --build examples/build --target audio_host --parallel 2
 
-      - name: Publish hub test firmware
+      - name: Publish mount-only hub firmware
         uses: actions/upload-artifact@v4
         with:
-          name: audio-host-hub-fixed-rate-skip-setcur
+          name: audio-host-hub-mount-only
           path: |
             examples/build/audio_host/audio_host.uf2
             examples/build/audio_host/audio_host.hex
