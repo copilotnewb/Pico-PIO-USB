@@ -69,18 +69,20 @@ jobs:
         run: |
           set -euxo pipefail
           python3 - <<'PY'
+          import re
           from pathlib import Path
           p = Path('pico-sdk/lib/tinyusb/src/class/audio/audio_host.c')
           s = p.read_text()
-          old = '''if (_audioh_itf[s->idx].protocol == AUDIO_INT_PROTOCOL_CODE_V1 &&
-              rate_source->frequency_access == AUDIOH_CTRL_READ_WRITE) {'''
-          new = '''if (_audioh_itf[s->idx].protocol == AUDIO_INT_PROTOCOL_CODE_V1 &&
-              rate_source->frequency_access == AUDIOH_CTRL_READ_WRITE &&
-              rate_source->sample_rate_count > 1) {'''
-          count = s.count(old)
+          pattern = re.compile(
+              r'(if \(_audioh_itf\[s->idx\]\.protocol == AUDIO_INT_PROTOCOL_CODE_V1 &&\s*'
+              r'rate_source->frequency_access == AUDIOH_CTRL_READ_WRITE)(\) \{)'
+          )
+          s2, count = pattern.subn(
+              r'\1 &&\n      rate_source->sample_rate_count > 1\2', s, count=1
+          )
           if count != 1:
               raise SystemExit(f'expected exactly one UAC1 start condition, found {count}')
-          p.write_text(s.replace(old, new, 1))
+          p.write_text(s2)
           PY
           git -C "$PICO_SDK_PATH/lib/tinyusb" diff --check
           git -C "$PICO_SDK_PATH/lib/tinyusb" diff -- src/class/audio/audio_host.c
