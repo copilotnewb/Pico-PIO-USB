@@ -1,0 +1,15 @@
+diff --git a/src/class/audio/audio_host.c b/src/class/audio/audio_host.c
+--- a/src/class/audio/audio_host.c
++++ b/src/class/audio/audio_host.c
+@@
+ static void audioh_stream_start_active(tuh_audio_stream_t *s) {
+   #if CFG_TUH_AUDIO_PROTOCOLS & TUH_AUDIO_PROTOCOL_UAC1
+   const audioh_as_config_t   *as          = audioh_stream_active_as(s);
+   const audioh_rate_source_t *rate_source = audioh_as_rate_source(s, as);
+   if (_audioh_itf[s->idx].protocol == AUDIO_INT_PROTOCOL_CODE_V1 &&
+-      rate_source->frequency_access == AUDIOH_CTRL_READ_WRITE) {
++      rate_source->frequency_access == AUDIOH_CTRL_READ_WRITE &&
++      rate_source->sample_rate_count > 1) {
+     if (!audioh_stream_set_freq(s, audioh_stream_start_set_freq_complete)) {
+       audioh_stream_start_done(s, XFER_RESULT_FAILED);
+     }
