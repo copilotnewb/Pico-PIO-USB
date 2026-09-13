@@ -18,18 +18,19 @@ enum {
 
 enum {
   AUDIO_DIAG_FAULT_NONE = 0,
-  AUDIO_DIAG_FAULT_SETUP_REJECTED = 1,
-  AUDIO_DIAG_FAULT_EP_OPEN = 2,
-  AUDIO_DIAG_FAULT_CAPTURE_START = 3,
-  AUDIO_DIAG_FAULT_PLAYBACK_START = 4,
-  AUDIO_DIAG_FAULT_CAPTURE_XFER = 5,
-  AUDIO_DIAG_FAULT_PLAYBACK_XFER = 6,
-  AUDIO_DIAG_FAULT_STOP = 7,
-  AUDIO_DIAG_FAULT_ISO_SUBMIT = 8,
-  AUDIO_DIAG_FAULT_INIT = 9,
-  // Focused hub diagnostic codes used only when playback START_COMPLETE fails.
-  AUDIO_DIAG_FAULT_PLAYBACK_SET_RATE = 10,
-  AUDIO_DIAG_FAULT_PLAYBACK_START_OTHER = 11,
+  // Focused one-burst codes for the current hub playback-start investigation.
+  AUDIO_DIAG_FAULT_PLAYBACK_SET_INTERFACE = 1,
+  AUDIO_DIAG_FAULT_PLAYBACK_SET_RATE = 2,
+  AUDIO_DIAG_FAULT_PLAYBACK_START_OTHER = 3,
+  // Generic fallbacks retained for unexpected failures.
+  AUDIO_DIAG_FAULT_SETUP_REJECTED = 4,
+  AUDIO_DIAG_FAULT_EP_OPEN = 5,
+  AUDIO_DIAG_FAULT_CAPTURE_START = 6,
+  AUDIO_DIAG_FAULT_CAPTURE_XFER = 7,
+  AUDIO_DIAG_FAULT_PLAYBACK_XFER = 8,
+  AUDIO_DIAG_FAULT_STOP = 9,
+  AUDIO_DIAG_FAULT_ISO_SUBMIT = 10,
+  AUDIO_DIAG_FAULT_INIT = 11,
 };
 
 enum {
@@ -41,7 +42,6 @@ enum {
 enum {
   AUDIO_DIAG_PULSE_MS = 100,
   AUDIO_DIAG_PULSE_PERIOD_MS = 250,
-  AUDIO_DIAG_GROUP_GAP_MS = 1000,
   AUDIO_DIAG_CYCLE_GAP_MS = 1500,
 };
 
@@ -92,38 +92,22 @@ static inline void audio_diag_playback_complete(audio_diag_state_t *s) {
   }
 }
 
+/* One burst only. Before any failure it shows the progress stage. Once a fault
+ * is latched it shows only the fault code, followed by the long cycle gap. */
+static inline uint8_t audio_diag_led_pulse_count(const audio_diag_state_t *s) {
+  return s->fault_code != AUDIO_DIAG_FAULT_NONE ? s->fault_code : s->stage;
+}
+
 static inline uint32_t audio_diag_led_cycle_ms(const audio_diag_state_t *s) {
-  uint32_t const stage_span = (uint32_t)s->stage * AUDIO_DIAG_PULSE_PERIOD_MS;
-  if (s->fault_code == AUDIO_DIAG_FAULT_NONE) {
-    return stage_span + AUDIO_DIAG_CYCLE_GAP_MS;
-  }
-  return stage_span + AUDIO_DIAG_GROUP_GAP_MS +
-         (uint32_t)s->fault_code * AUDIO_DIAG_PULSE_PERIOD_MS +
+  return (uint32_t)audio_diag_led_pulse_count(s) * AUDIO_DIAG_PULSE_PERIOD_MS +
          AUDIO_DIAG_CYCLE_GAP_MS;
 }
 
-/*
- * Normal: [stage-count burst] [long gap].
- * Fault:  [stage-count burst] [1 s gap] [fault-code burst] [long gap].
- * Pulses are 100 ms on every 250 ms.
- */
 static inline bool audio_diag_led_on(const audio_diag_state_t *s, uint32_t elapsed_ms) {
-  uint32_t phase = elapsed_ms % audio_diag_led_cycle_ms(s);
-  uint32_t const stage_span = (uint32_t)s->stage * AUDIO_DIAG_PULSE_PERIOD_MS;
-
-  if (phase < stage_span) {
-    return phase % AUDIO_DIAG_PULSE_PERIOD_MS < AUDIO_DIAG_PULSE_MS;
-  }
-
-  if (s->fault_code == AUDIO_DIAG_FAULT_NONE) return false;
-
-  phase -= stage_span;
-  if (phase < AUDIO_DIAG_GROUP_GAP_MS) return false;
-  phase -= AUDIO_DIAG_GROUP_GAP_MS;
-
-  uint32_t const fault_span =
-      (uint32_t)s->fault_code * AUDIO_DIAG_PULSE_PERIOD_MS;
-  return phase < fault_span &&
+  uint32_t const phase = elapsed_ms % audio_diag_led_cycle_ms(s);
+  uint32_t const burst_span =
+      (uint32_t)audio_diag_led_pulse_count(s) * AUDIO_DIAG_PULSE_PERIOD_MS;
+  return phase < burst_span &&
          phase % AUDIO_DIAG_PULSE_PERIOD_MS < AUDIO_DIAG_PULSE_MS;
 }
 
