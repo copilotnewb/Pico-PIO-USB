@@ -40,6 +40,14 @@ int main(void) {
   assert(AUDIO_DIAG_FAULT_ISO_SUBMIT == 8);
   assert(AUDIO_DIAG_FAULT_INIT == 9);
 
+  // Playback start diagnostics classify the last setup request to the Audio device.
+  const uint8_t set_interface[8] = {0x01, 0x0b, 0x02, 0x00, 0x02, 0x00, 0x00, 0x00};
+  const uint8_t set_rate[8]      = {0x22, 0x01, 0x00, 0x01, 0x02, 0x00, 0x03, 0x00};
+  const uint8_t other[8]         = {0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x12, 0x00};
+  assert(audio_diag_playback_start_detail(set_interface) == AUDIO_DIAG_PLAYBACK_CTL_SET_INTERFACE);
+  assert(audio_diag_playback_start_detail(set_rate) == AUDIO_DIAG_PLAYBACK_CTL_SET_RATE);
+  assert(audio_diag_playback_start_detail(other) == AUDIO_DIAG_PLAYBACK_CTL_OTHER);
+
   // Preserve the first/root fault even if the demo's automatic retry later fails differently.
   audio_diag_fault(&s, AUDIO_DIAG_FAULT_CAPTURE_START);
   audio_diag_fault(&s, AUDIO_DIAG_FAULT_CAPTURE_XFER);
