@@ -141,11 +141,27 @@ void tuh_audio_playback_cb(uint8_t idx, uint8_t stream_idx, uint16_t bytes) {
 void tuh_audio_event_cb(uint8_t idx, uint8_t stream_idx,
                         tuh_audio_event_t event, tusb_xfer_result_t result) {
   sync_link();
+  const bool capture =
+      tuh_audio_stream_direction(idx, stream_idx) == TUH_AUDIO_STREAM_CAPTURE;
+
   if (result != XFER_RESULT_SUCCESS) {
-    audio_diagnostics_fault(AUDIO_DIAG_FAULT_AUDIO_EVENT,
-                            "TinyUSB audio event failed");
-  } else if (event == TUH_AUDIO_EVENT_START_COMPLETE &&
-             tuh_audio_stream_direction(idx, stream_idx) == TUH_AUDIO_STREAM_PLAYBACK) {
+    uint8_t fault_code = AUDIO_DIAG_FAULT_STOP;
+    const char *message = "TinyUSB audio stop failed";
+
+    if (event == TUH_AUDIO_EVENT_START_COMPLETE) {
+      fault_code = capture ? AUDIO_DIAG_FAULT_CAPTURE_START
+                           : AUDIO_DIAG_FAULT_PLAYBACK_START;
+      message = capture ? "capture stream start failed"
+                        : "playback stream start failed";
+    } else if (event == TUH_AUDIO_EVENT_XFER_FAILED) {
+      fault_code = capture ? AUDIO_DIAG_FAULT_CAPTURE_XFER
+                           : AUDIO_DIAG_FAULT_PLAYBACK_XFER;
+      message = capture ? "capture ISO transfer failed"
+                        : "playback ISO transfer failed";
+    }
+
+    audio_diagnostics_fault(fault_code, message);
+  } else if (event == TUH_AUDIO_EVENT_START_COMPLETE && !capture) {
     audio_diag_advance(&state, AUDIO_DIAG_PLAYBACK_STARTED);
   }
   audio_example_event_cb(idx, stream_idx, event, result);
