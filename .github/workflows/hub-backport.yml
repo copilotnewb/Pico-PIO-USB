@@ -23,6 +23,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Run diagnostic state test
+        shell: bash
+        run: |
+          cc -std=c11 -Wall -Wextra -Iexamples/audio_host tests/test_audio_diagnostics.c -o /tmp/test_audio_diagnostics
+          /tmp/test_audio_diagnostics
+
       - name: Overlay upstream 0.5.3 transport and ISO backport
         shell: bash
         run: |
@@ -71,7 +77,7 @@ jobs:
       - name: Publish hub test firmware
         uses: actions/upload-artifact@v4
         with:
-          name: audio-host-hub-retry
+          name: audio-host-hub-diagnostic
           path: |
             examples/build/audio_host/audio_host.uf2
             examples/build/audio_host/audio_host.hex
