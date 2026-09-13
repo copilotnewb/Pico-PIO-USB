@@ -27,6 +27,7 @@ static uint32_t reset_start_count, reset_end_count, iso_out_submitted;
 static uint16_t iso_out_mask[CFG_TUH_DEVICE_MAX + 1];
 static uint32_t observed_generation;
 static uint8_t printed_stage, printed_fault;
+static uint8_t audio_daddr, last_audio_setup_detail;
 static volatile uint32_t link_generation, attach_count, remove_count, xfer_event_count;
 static volatile bool link_attached;
 
@@ -64,6 +65,8 @@ static void sync_link(void) {
   memset(iso_out_mask, 0, sizeof(iso_out_mask));
   capture_count = playback_count = failure_count = iso_out_submitted = 0;
   reset_start_count = reset_end_count = 0;
+  audio_daddr = 0;
+  last_audio_setup_detail = AUDIO_DIAG_PLAYBACK_CTL_OTHER;
   led_epoch_ms = tusb_time_millis_api();
   printf("[diag] HCD %s on rhport 1; generation=%lu\r\n",
          attached ? "attach" : "remove", (unsigned long)generation);
@@ -117,13 +120,19 @@ void tuh_umount_cb(uint8_t daddr) {
 
 void tuh_audio_mount_cb(uint8_t idx) {
   sync_link();
+  audio_daddr = tuh_audio_get_dev_addr(idx);
+  last_audio_setup_detail = AUDIO_DIAG_PLAYBACK_CTL_OTHER;
   audio_diag_advance(&state, AUDIO_DIAG_AUDIO_MOUNTED);
-  printf("[diag] audio mount idx=%u\r\n", idx);
+  printf("[diag] audio mount idx=%u addr=%u\r\n", idx, audio_daddr);
   audio_example_mount_cb(idx);
 }
 
 void tuh_audio_umount_cb(uint8_t idx) {
   sync_link();
+  if (tuh_audio_get_dev_addr(idx) == audio_daddr) {
+    audio_daddr = 0;
+    last_audio_setup_detail = AUDIO_DIAG_PLAYBACK_CTL_OTHER;
+  }
   audio_example_umount_cb(idx);
 }
 
@@ -149,10 +158,25 @@ void tuh_audio_event_cb(uint8_t idx, uint8_t stream_idx,
     const char *message = "TinyUSB audio stop failed";
 
     if (event == TUH_AUDIO_EVENT_START_COMPLETE) {
-      fault_code = capture ? AUDIO_DIAG_FAULT_CAPTURE_START
-                           : AUDIO_DIAG_FAULT_PLAYBACK_START;
-      message = capture ? "capture stream start failed"
-                        : "playback stream start failed";
+      if (capture) {
+        fault_code = AUDIO_DIAG_FAULT_CAPTURE_START;
+        message = "capture stream start failed";
+      } else {
+        switch (last_audio_setup_detail) {
+          case AUDIO_DIAG_PLAYBACK_CTL_SET_INTERFACE:
+            fault_code = AUDIO_DIAG_FAULT_PLAYBACK_SET_INTERFACE;
+            message = "playback SET_INTERFACE failed";
+            break;
+          case AUDIO_DIAG_PLAYBACK_CTL_SET_RATE:
+            fault_code = AUDIO_DIAG_FAULT_PLAYBACK_SET_RATE;
+            message = "playback sample-rate SET_CUR failed";
+            break;
+          default:
+            fault_code = AUDIO_DIAG_FAULT_PLAYBACK_START_OTHER;
+            message = "playback start failed after other control request";
+            break;
+        }
+      }
     } else if (event == TUH_AUDIO_EVENT_XFER_FAILED) {
       fault_code = capture ? AUDIO_DIAG_FAULT_CAPTURE_XFER
                            : AUDIO_DIAG_FAULT_PLAYBACK_XFER;
@@ -188,6 +212,14 @@ bool __wrap_hcd_setup_send(uint8_t rhport, uint8_t daddr, const uint8_t setup[8]
   printf("[diag] SETUP addr=%u type=%02x req=%02x value=%04x index=%04x len=%u\r\n",
          daddr, setup[0], setup[1], setup[2] | ((unsigned)setup[3] << 8),
          setup[4] | ((unsigned)setup[5] << 8), setup[6] | ((unsigned)setup[7] << 8));
+
+  if (audio_daddr != 0 && daddr == audio_daddr) {
+    uint8_t const detail = audio_diag_playback_start_detail(setup);
+    if (detail != AUDIO_DIAG_PLAYBACK_CTL_OTHER) {
+      last_audio_setup_detail = detail;
+    }
+  }
+
   const bool accepted = __real_hcd_setup_send(rhport, daddr, setup);
   if (!accepted) {
     audio_diagnostics_fault(AUDIO_DIAG_FAULT_SETUP_REJECTED,
