@@ -27,6 +27,15 @@ enum {
   AUDIO_DIAG_FAULT_STOP = 7,
   AUDIO_DIAG_FAULT_ISO_SUBMIT = 8,
   AUDIO_DIAG_FAULT_INIT = 9,
+  // Focused hub diagnostic codes used only when playback START_COMPLETE fails.
+  AUDIO_DIAG_FAULT_PLAYBACK_SET_RATE = 10,
+  AUDIO_DIAG_FAULT_PLAYBACK_START_OTHER = 11,
+};
+
+enum {
+  AUDIO_DIAG_PLAYBACK_CTL_OTHER = 0,
+  AUDIO_DIAG_PLAYBACK_CTL_SET_INTERFACE = 1,
+  AUDIO_DIAG_PLAYBACK_CTL_SET_RATE = 2,
 };
 
 enum {
@@ -59,6 +68,21 @@ static inline void audio_diag_fault(audio_diag_state_t *s, uint8_t fault_code) {
       fault_code != AUDIO_DIAG_FAULT_NONE) {
     s->fault_code = fault_code;
   }
+}
+
+/* Classify the control request most likely responsible for a UAC1 playback
+ * start failure. SET_INTERFACE activates the selected AS alternate setting.
+ * UAC1 SET_CUR(SAMPLING_FREQ) targets the endpoint after activation. */
+static inline uint8_t audio_diag_playback_start_detail(const uint8_t setup[8]) {
+  if (setup[0] == 0x01u && setup[1] == 0x0bu) {
+    return AUDIO_DIAG_PLAYBACK_CTL_SET_INTERFACE;
+  }
+  if (setup[0] == 0x22u && setup[1] == 0x01u &&
+      setup[2] == 0x00u && setup[3] == 0x01u &&
+      setup[6] == 0x03u && setup[7] == 0x00u) {
+    return AUDIO_DIAG_PLAYBACK_CTL_SET_RATE;
+  }
+  return AUDIO_DIAG_PLAYBACK_CTL_OTHER;
 }
 
 static inline void audio_diag_playback_complete(audio_diag_state_t *s) {
