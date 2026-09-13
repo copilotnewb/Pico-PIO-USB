@@ -16,10 +16,25 @@ enum {
   AUDIO_DIAG_PLAYBACK_COMPLETING
 };
 
+enum {
+  AUDIO_DIAG_FAULT_NONE = 0,
+  AUDIO_DIAG_FAULT_SETUP_REJECTED = 1,
+  AUDIO_DIAG_FAULT_EP_OPEN = 2,
+  AUDIO_DIAG_FAULT_AUDIO_EVENT = 3,
+  AUDIO_DIAG_FAULT_ISO_SUBMIT = 4,
+};
+
+enum {
+  AUDIO_DIAG_PULSE_MS = 100,
+  AUDIO_DIAG_PULSE_PERIOD_MS = 250,
+  AUDIO_DIAG_GROUP_GAP_MS = 1000,
+  AUDIO_DIAG_CYCLE_GAP_MS = 1500,
+};
+
 typedef struct {
   uint8_t stage;
   uint8_t playback_completions;
-  bool fault;
+  uint8_t fault_code;
 } audio_diag_state_t;
 
 static inline void audio_diag_reset(audio_diag_state_t *s) {
@@ -32,6 +47,10 @@ static inline void audio_diag_advance(audio_diag_state_t *s, uint8_t stage) {
   }
 }
 
+static inline void audio_diag_fault(audio_diag_state_t *s, uint8_t fault_code) {
+  if (fault_code != AUDIO_DIAG_FAULT_NONE) s->fault_code = fault_code;
+}
+
 static inline void audio_diag_playback_complete(audio_diag_state_t *s) {
   if (s->playback_completions < 2) ++s->playback_completions;
   if (s->playback_completions == 2) {
@@ -39,11 +58,39 @@ static inline void audio_diag_playback_complete(audio_diag_state_t *s) {
   }
 }
 
-/* 100 ms pulses, 250 ms spacing, then a 1250 ms gap. Nine pulses = fault. */
+static inline uint32_t audio_diag_led_cycle_ms(const audio_diag_state_t *s) {
+  uint32_t const stage_span = (uint32_t)s->stage * AUDIO_DIAG_PULSE_PERIOD_MS;
+  if (s->fault_code == AUDIO_DIAG_FAULT_NONE) {
+    return stage_span + AUDIO_DIAG_CYCLE_GAP_MS;
+  }
+  return stage_span + AUDIO_DIAG_GROUP_GAP_MS +
+         (uint32_t)s->fault_code * AUDIO_DIAG_PULSE_PERIOD_MS +
+         AUDIO_DIAG_CYCLE_GAP_MS;
+}
+
+/*
+ * Normal: [stage-count burst] [long gap].
+ * Fault:  [stage-count burst] [1 s gap] [fault-code burst] [long gap].
+ * Pulses are 100 ms on every 250 ms.
+ */
 static inline bool audio_diag_led_on(const audio_diag_state_t *s, uint32_t elapsed_ms) {
-  const uint32_t pulses = s->fault ? 9u : s->stage;
-  const uint32_t phase = elapsed_ms % (pulses * 250u + 1250u);
-  return phase < pulses * 250u && phase % 250u < 100u;
+  uint32_t phase = elapsed_ms % audio_diag_led_cycle_ms(s);
+  uint32_t const stage_span = (uint32_t)s->stage * AUDIO_DIAG_PULSE_PERIOD_MS;
+
+  if (phase < stage_span) {
+    return phase % AUDIO_DIAG_PULSE_PERIOD_MS < AUDIO_DIAG_PULSE_MS;
+  }
+
+  if (s->fault_code == AUDIO_DIAG_FAULT_NONE) return false;
+
+  phase -= stage_span;
+  if (phase < AUDIO_DIAG_GROUP_GAP_MS) return false;
+  phase -= AUDIO_DIAG_GROUP_GAP_MS;
+
+  uint32_t const fault_span =
+      (uint32_t)s->fault_code * AUDIO_DIAG_PULSE_PERIOD_MS;
+  return phase < fault_span &&
+         phase % AUDIO_DIAG_PULSE_PERIOD_MS < AUDIO_DIAG_PULSE_MS;
 }
 
 #endif
